@@ -27,5 +27,6 @@
     <Compile Include="$(MSBuildThisFileDirectory)ReflectionHelper.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShortTimeSpan.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)VersionChecker.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ProcessHelper.cs" />
   </ItemGroup>
 </Project>
