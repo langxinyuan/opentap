@@ -1,183 +1,15 @@
 using System;
-using System.Collections.Generic;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Reflection;
 using System.Security.Principal;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Xml.Serialization;
-using OpenTap.Cli;
 using OpenTap.Diagnostic;
 
 namespace OpenTap
 {
-    /// <summary>
-    /// <see cref="TapSerializer"/> does not correctly serialize / deserialize <see cref="Event"/> presumably because it is a struct
-    /// </summary>
-    internal static class SerializationHelper
-    {
-        private static XmlSerializer serializer = new XmlSerializer(typeof(Event));
-
-        public static byte[] EventToBytes(Event evt)
-        {
-            var ms = new MemoryStream();
-            serializer.Serialize(ms, evt);
-
-            return ms.ToArray();
-        }
-
-        public static Event StreamToEvent(Stream stream)
-        {
-            return (Event)serializer.Deserialize(stream);
-        }
-    }
-
-    internal static class PipeReader
-    {
-        /// <summary>
-        /// Reads a message by interpreting the first byte as the message length
-        /// and the concatenating reads until it encounters a terminating message of length '0'.
-        /// </summary>
-        /// <param name="pipe"></param>
-        /// <returns></returns>
-        public static MemoryStream ReadMessage(this PipeStream pipe)
-        {
-            int getLength()
-            {
-                var buffer = new byte[2];
-                var numRead = 0;
-
-                while (numRead < 2)
-                {
-                    numRead += pipe.Read(buffer, numRead, 2 - numRead);
-                    if (numRead == 0) return 0;
-                }
-
-                var lower = buffer[0];
-                var upper = buffer[1];
-
-                return lower | (upper << 8);
-            }
-
-            var messageLength = getLength();
-            var buffers = new List<byte[]>();
-
-            while (messageLength > 0)
-            {
-                var buf = new byte[messageLength];
-                var numRead = 0;
-                while (numRead < messageLength)
-                {
-                    numRead += pipe.Read(buf, numRead, messageLength - numRead);
-                }
-
-                buffers.Add(buf);
-
-                messageLength = getLength();
-            }
-
-            var ms = new MemoryStream();
-            var index = 0;
-
-            foreach (var buf2 in buffers)
-            {
-                ms.Write(buf2, index, buf2.Length);
-                index += buf2.Length;
-            }
-
-            ms.Seek(0, SeekOrigin.Begin);
-
-            return ms;
-        }
-
-        private static object writeLock = new object();
-
-        /// <summary>
-        /// Sends a message by splitting it into messages of length UInt16.MaxValue
-        /// </summary>
-        /// <param name="pipe"></param>
-        /// <param name="message"></param>
-        public static void WriteMessage(this PipeStream pipe, string message)
-        {
-            var bytes = Encoding.UTF8.GetBytes(message);
-            pipe.WriteMessage(bytes);
-        }
-
-        public static void WriteMessage(this PipeStream pipe, byte[] bytes)
-        {
-            lock (writeLock)
-            {
-                var sent = 0;
-                var remaining = bytes.Length;
-                while (remaining > 0)
-                {
-                    var length = Math.Min(remaining, UInt16.MaxValue);
-                    remaining -= length;
-                    // first send the message length
-                    // lower byte
-                    pipe.WriteByte((byte)(length & 255));
-                    // higher byte
-                    pipe.WriteByte((byte)(length / 256));
-                    // then write the message
-                    pipe.Write(bytes, sent, length);
-
-                    sent += length;
-                }
-
-                // the message is terminated by 0 indicating a 0 length message
-                pipe.WriteByte(0);
-                pipe.WriteByte(0);
-                pipe.Flush();
-            }
-        }
-
-
-    }
-
-    [Browsable(false)]
-    internal class ProcessCliAction : ICliAction
-    {
-        [CommandLineArgument("PipeHandle")] public string PipeHandle { get; set; }
-
-        public int Execute(CancellationToken cancellationToken)
-        {
-            var client = new NamedPipeClientStream(".", PipeHandle, PipeDirection.InOut);
-            var listener = new EventTraceListener();
-
-            listener.MessageLogged += evts =>
-            {
-                foreach (var evt in evts)
-                {
-                    if (client.IsConnected == false) return;
-                    // The log will be flushed before the client is disposed
-                    client.WriteMessage(SerializationHelper.EventToBytes(evt));
-                }
-            };
-
-            try
-            {
-                client.Connect();
-                var msg = client.ReadMessage();
-                var steps = (ITestStep)new TapSerializer().Deserialize(msg);
-                var plan = new TestPlan();
-                plan.ChildTestSteps.Add(steps);
-
-                Log.AddListener(listener);
-
-                return (int)plan.Execute(Array.Empty<IResultListener>()).Verdict;
-            }
-            finally
-            {
-                Log.RemoveListener(listener);
-                client.Dispose();
-            }
-        }
-    }
-
     /// <summary>
     /// This is an abstraction for running child processes with support for elevation.
     /// It executes a test step (which can have child test steps) in a new process
@@ -221,7 +53,7 @@ namespace OpenTap
 
                 using (var p = Process.Start(pInfo))
                 {
-                    p.BeginOutputReadLine();
+                    if (p == null) return false;
                     var output = p.StandardOutput.ReadToEnd().Trim();
                     if (int.TryParse(output, out var id) && id == 0)
                         return true;
@@ -230,7 +62,7 @@ namespace OpenTap
             }
         }
 
-        private static string getTap()
+        private static string GetTap()
         {
             var currentProcess = Assembly.GetExecutingAssembly().Location;
             if (string.IsNullOrWhiteSpace(currentProcess) == false &&
@@ -266,17 +98,56 @@ namespace OpenTap
         }
 
         private static TraceSource log = Log.CreateSource(nameof(ProcessHelper));
-        internal Process LastProcessHandle = null;
+        internal Process LastProcessHandle;
+
+        private static readonly object StdoutLock = new object();
+        private static bool stdoutSuspended;
+        private static TextWriter originalOut;
+        private static StringWriter tmpOut;
+        private static void SuspendStdout()
+        {
+            lock(StdoutLock)
+            {
+                if (stdoutSuspended) return;
+                originalOut = Console.Out;
+                tmpOut = new StringWriter();
+                Console.SetOut(tmpOut);
+                originalOut.Flush();
+                stdoutSuspended = true;
+            }
+        }
+        private static void ResumeStdout()
+        {
+            lock(StdoutLock)
+            {
+                if (stdoutSuspended == false) return;
+                // Restore stdout after the server has connected
+                Console.SetOut(originalOut);
+                var lines = tmpOut.ToString()
+                    .Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries);
+                
+                foreach (var line in lines)
+                {
+                    Console.WriteLine(line);
+                }
+
+                stdoutSuspended = false;
+                tmpOut.Dispose();
+                tmpOut = null;
+            }
+        }
 
         public Verdict Run(ITestStep step, bool elevate, CancellationToken token)
         {
             var handle = Guid.NewGuid().ToString();
-            var pInfo = new ProcessStartInfo(getTap())
+            var pInfo = new ProcessStartInfo(GetTap())
             {
                 Arguments = $"{nameof(ProcessCliAction)} --PipeHandle \"{handle}\"",
                 CreateNoWindow = true,
                 WindowStyle = ProcessWindowStyle.Hidden,
-                UseShellExecute = true
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
             };
 
             if (elevate)
@@ -289,8 +160,13 @@ namespace OpenTap
                 else
                 {
                     pInfo.Verb = "runas";
+                    pInfo.UseShellExecute = true;
+                    pInfo.RedirectStandardOutput = false;
+                    pInfo.RedirectStandardError = false;
                 }
             }
+            
+            SuspendStdout();
 
             using (var p = Process.Start(pInfo))
             {
@@ -316,11 +192,16 @@ namespace OpenTap
                 try
                 {
                     var server = new NamedPipeServerStream(handle, PipeDirection.InOut, 1);
-                    server.WaitForConnection();
+                    server.WaitForConnectionAsync(token).GetAwaiter().GetResult();
+                    if (token.IsCancellationRequested)
+                        throw new OperationCanceledException($"Process cancelled by the user.");
+                    // Resume stdout after the server has connected as we now know the application has launched
+                    ResumeStdout();
+
                     var stepString = new TapSerializer().SerializeToString(step);
                     server.WriteMessage(stepString);
 
-                    while (server.IsConnected)
+                    while (server.IsConnected && p.HasExited == false)
                     {
                         if (token.IsCancellationRequested)
                             throw new OperationCanceledException($"Process cancelled by the user.");
@@ -344,6 +225,7 @@ namespace OpenTap
                 }
                 finally
                 {
+                    ResumeStdout();
                     if (p.HasExited == false)
                     {
                         p.Kill();

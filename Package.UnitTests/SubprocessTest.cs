@@ -16,7 +16,7 @@ namespace OpenTap.Package.UnitTests
     public class SubprocessTest
     {
         [Test]
-        public void TestElevatedIO()
+        public void TestProcessIO()
         {
             var messages = new List<string>();
 
@@ -24,7 +24,6 @@ namespace OpenTap.Package.UnitTests
             {
                 LogMessage = "Hello World"
             };
-
 
             var ph = new ProcessHelper(false);
             ph.MessageLogged += evts => messages.AddRange(evts.Select(e => e.Message));
@@ -75,8 +74,9 @@ namespace OpenTap.Package.UnitTests
             var server = new NamedPipeServerStream(handle, PipeDirection.InOut);
             var client = new NamedPipeClientStream(".", handle, PipeDirection.InOut);
 
-            server.WaitForConnectionAsync();
+            var conn = server.WaitForConnectionAsync();
             client.Connect();
+            conn.GetAwaiter().GetResult();
 
             { // short message
                 var testMessage = "Hello World";

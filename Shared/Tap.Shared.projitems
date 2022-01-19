@@ -28,5 +28,8 @@
     <Compile Include="$(MSBuildThisFileDirectory)ShortTimeSpan.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)VersionChecker.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ProcessHelper.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ProcessCliAction.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)PipeReader.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)SerializationHelper.cs" />
   </ItemGroup>
 </Project>
