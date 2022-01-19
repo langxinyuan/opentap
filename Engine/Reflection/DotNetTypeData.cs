@@ -64,6 +64,16 @@ namespace OpenTap
 
                     td = new TypeData(type);
                 }
+                else
+                {
+                    // This can occur when using shared projects because the type is defined in multiple different
+                    // assemblies, but the instance from one assembly is cached, and the TypeData of an instance
+                    // from another assembly is required.
+                    if (td == null || td.Type != type)
+                    {
+                        td = new TypeData(type);
+                    }
+                }
             }
 
             return dict.GetValue(type, x => td);

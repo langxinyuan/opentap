@@ -154,8 +154,12 @@ namespace OpenTap
             {
                 if (OperatingSystem.Current == OperatingSystem.Linux)
                 {
-                    pInfo.Arguments = $"\"{pInfo.FileName}\" {pInfo.Arguments}";
+                    // -E preserves environment variables
+                    pInfo.Arguments = $"-E \"{pInfo.FileName}\" {pInfo.Arguments}";
                     pInfo.FileName = "sudo";
+                    if (SudoHelper.IsSudoAuthenticated() == false)
+                        if (SudoHelper.Authenticate() == false)
+                            throw new Exception($"User failed to authenticate as sudo.");
                 }
                 else
                 {
