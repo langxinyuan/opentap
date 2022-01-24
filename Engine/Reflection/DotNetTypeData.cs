@@ -66,9 +66,10 @@ namespace OpenTap
                 }
                 else
                 {
-                    // This can occur when using shared projects because the type is defined in multiple different
-                    // assemblies, but the instance from one assembly is cached, and the TypeData of an instance
-                    // from another assembly is required.
+                    // This can occur when using shared projects because the same type is defined in multiple different assemblies with the same fully qualified
+                    // name (namespace+typename). In this case, it is possible for the PluginSearcher to resolve an instance of this typedata from a different
+                    // type than the input type to this method, which will cause all sorts of reflection errors. We detect this edge case here, and if there
+                    // is a type mismatch, we instantiate a new typedata from the correct type.
                     if (td == null || td.Type != type)
                     {
                         td = new TypeData(type);
