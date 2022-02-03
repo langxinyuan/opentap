@@ -5,16 +5,30 @@ using System.Threading;
 
 namespace OpenTap.Package.PackageInstallHelpers
 {
+    internal interface IFileLock : IDisposable
+    {
+    }
+
+    internal static class FileLock
+    {
+        public static IFileLock Take(string file)
+        {
+            if (OperatingSystem.Current == OperatingSystem.Windows) return Win32FileLock.Take(file);
+            return PosixFileLock.Take(file);
+        }
+    }
+
     /// <summary> Locks a file using flock on linux. This essentially works as a named mutex.  </summary>
-    class PosixFileLock : IDisposable
+    class PosixFileLock : IFileLock
     {
         int fd;
+
         public static PosixFileLock Take(string file)
         {
             // Open 'file' in read/write + append mode. If the file does not exist it will be created with the
             // most permissive access settings possible
             int fd = PosixNative.open(file, PosixNative.O_RDWR | PosixNative.O_APPEND, PosixNative.ALL_READ_WRITE);
-            var lockObj = new PosixFileLock() {fd = fd};
+            var lockObj = new PosixFileLock() { fd = fd };
             lockObj.Take();
             return lockObj;
         }
@@ -24,7 +38,9 @@ namespace OpenTap.Package.PackageInstallHelpers
         /// This call wil block until the lock is acquired
         /// </summary>
         void Take() => PosixNative.flock(fd, PosixNative.LOCK_EX);
+
         void Release() => PosixNative.close(fd);
+
         public void Dispose()
         {
             if (fd >= 0)
@@ -36,14 +52,15 @@ namespace OpenTap.Package.PackageInstallHelpers
         }
     }
 
-    class Win32FileLock : IDisposable
+    class Win32FileLock : IFileLock
     {
         private Mutex mtx;
+
         public static Win32FileLock Take(string file)
         {
             var mtx = new Mutex(false, "package_install_lock_" + Path.GetFullPath(file).GetHashCode());
             mtx.WaitOne();
-            return new Win32FileLock(){mtx = mtx};
+            return new Win32FileLock() { mtx = mtx };
         }
 
         public void Dispose()
@@ -75,11 +92,11 @@ namespace OpenTap.Package.PackageInstallHelpers
         public const int S_IRUSR = 256; //00000400
         public const int S_IWUSR = 128; //00000200
 
-        public const int S_IRGRP = 32;  //00000040
-        public const int S_IWGRP = 16;  //00000020
+        public const int S_IRGRP = 32; //00000040
+        public const int S_IWGRP = 16; //00000020
 
-        public const int S_IROTH = 4;   //00000004
-        public const int S_IWOTH = 2;   //00000002
+        public const int S_IROTH = 4; //00000004
+        public const int S_IWOTH = 2; //00000002
 
         public const int ALL_READ_WRITE = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
     }

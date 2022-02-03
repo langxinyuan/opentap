@@ -14,12 +14,6 @@ namespace OpenTap.Package.PackageInstallHelpers
 
         public override void Run()
         {
-            IDisposable fileLock;
-            if (OperatingSystem.Current == OperatingSystem.Windows)
-                fileLock = Win32FileLock.Take(Target);
-            else
-                fileLock = PosixFileLock.Take(Target);
-
             var repositories = new HashSet<string>();
 
             foreach (var pkg in Packages)
@@ -50,16 +44,13 @@ namespace OpenTap.Package.PackageInstallHelpers
 
             try
             {
+                using var fileLock = FileLock.Take(Target);
                 var result = action.Execute(CancellationToken.None);
                 UpgradeVerdict(result == 0 ? Verdict.Pass : Verdict.Fail);
             }
             catch
             {
                 UpgradeVerdict(Verdict.Error);
-            }
-            finally
-            {
-                fileLock.Dispose();
             }
         }
     }

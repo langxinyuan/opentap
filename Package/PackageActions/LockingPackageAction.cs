@@ -3,17 +3,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, you can obtain one at http://mozilla.org/MPL/2.0/.
 using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
-using System.Threading.Tasks;
 using OpenTap.Cli;
 
 namespace OpenTap.Package
@@ -115,7 +109,7 @@ namespace OpenTap.Package
                     }
                     catch (AbandonedMutexException)
                     {
-                        // Another package manager exited without releasing the mutex. We can should be able to take it now.
+                        // Another package manager exited without releasing the mutex. We should be able to take it now.
                         if (!state.WaitOne(0))
                             throw new ExitCodeException(7, "Unable to run while another package manager operation is running.");
                     }
