@@ -9,6 +9,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using OpenTap.Cli;
+using OpenTap.Package.PackageInstallHelpers;
 
 namespace OpenTap.Package
 {
@@ -89,42 +90,32 @@ namespace OpenTap.Package
                 FileSystemHelper.EnsureDirectory(Target);
             }
 
-            using (Mutex state = GetMutex(Target))
+            using var fileLock = FileLock.Create(Target);
+            bool useLocking = Unlocked == false;
+            if (useLocking && !fileLock.WaitOne(0))
             {
-                bool useLocking = Unlocked == false;
-                if (useLocking && !state.WaitOne(0))
-                {
-                    log.Info("Waiting for other package manager operation to complete.");
-                    try
-                    {
-                        switch (WaitHandle.WaitAny(new WaitHandle[] { state, cancellationToken.WaitHandle }, 120000))
-                        {
-                            case 0: // we got the mutex
-                                break;
-                            case 1: // user cancelled
-                                throw new ExitCodeException(5, "User aborted while waiting for other package manager operation to complete.");
-                            case WaitHandle.WaitTimeout:
-                                throw new ExitCodeException(6, "Timeout after 2 minutes while waiting for other package manager operation to complete.");
-                        }
-                    }
-                    catch (AbandonedMutexException)
-                    {
-                        // Another package manager exited without releasing the mutex. We should be able to take it now.
-                        if (!state.WaitOne(0))
-                            throw new ExitCodeException(7, "Unable to run while another package manager operation is running.");
-                    }
-                }
-
+                log.Info("Waiting for other package manager operation to complete.");
                 try
                 {
-                    return LockedExecute(cancellationToken);
+                    switch (WaitHandle.WaitAny(new WaitHandle[] { fileLock.WaitHandle, cancellationToken.WaitHandle }, 120000))
+                    {
+                        case 0: // we got the mutex
+                            break;
+                        case 1: // user cancelled
+                            throw new ExitCodeException(5, "User aborted while waiting for other package manager operation to complete.");
+                        case WaitHandle.WaitTimeout:
+                            throw new ExitCodeException(6, "Timeout after 2 minutes while waiting for other package manager operation to complete.");
+                    }
                 }
-                finally
+                catch (AbandonedMutexException)
                 {
-                    if(useLocking)
-                        state.ReleaseMutex();
+                    // Another package manager exited without releasing the mutex. We should be able to take it now.
+                    if (!fileLock.WaitOne(0))
+                        throw new ExitCodeException(7, "Unable to run while another package manager operation is running.");
                 }
             }
+
+            return LockedExecute(cancellationToken);
         }
 
         /// <summary>

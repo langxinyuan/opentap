@@ -44,7 +44,9 @@ namespace OpenTap.Package.PackageInstallHelpers
 
             try
             {
-                using var fileLock = FileLock.Take(Target);
+                using var fileLock = FileLock.Create(Target);
+                if (fileLock.WaitOne(TimeSpan.FromMinutes(1)) == false)
+                    throw new TimeoutException($"Operation timed out while waiting for an exclusive lock on directory '{Target}'.");
                 var result = action.Execute(CancellationToken.None);
                 UpgradeVerdict(result == 0 ? Verdict.Pass : Verdict.Fail);
             }

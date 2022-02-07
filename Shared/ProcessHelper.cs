@@ -172,68 +172,65 @@ namespace OpenTap
             
             SuspendStdout();
 
-            using (var p = Process.Start(pInfo))
+            using var p = Process.Start(pInfo);
+            LastProcessHandle = p ?? throw new Exception($"Failed to spawn process.");
+
+            // Ensure the process is cleaned up
+            TapThread.Current.AbortToken.Register(() =>
             {
-                if (p == null) throw new Exception($"Failed to spawn process.");
-                LastProcessHandle = p;
-
-                // Ensure the process is cleaned up
-                TapThread.Current.AbortToken.Register(() =>
-                {
-                    if (p.HasExited) return;
-
-                    try
-                    {
-                        // process.Kill may throw if it has already exited.
-                        p.Kill();
-                    }
-                    catch (Exception ex)
-                    {
-                        log.Warning("Caught exception when killing process. {0}", ex.Message);
-                    }
-                });
+                if (p.HasExited) return;
 
                 try
                 {
-                    var server = new NamedPipeServerStream(handle, PipeDirection.InOut, 1);
-                    server.WaitForConnectionAsync(token).GetAwaiter().GetResult();
-                    if (token.IsCancellationRequested)
-                        throw new OperationCanceledException($"Process cancelled by the user.");
-                    // Resume stdout after the server has connected as we now know the application has launched
-                    ResumeStdout();
-
-                    var stepString = new TapSerializer().SerializeToString(step);
-                    server.WriteMessage(stepString);
-
-                    while (server.IsConnected && p.HasExited == false)
-                    {
-                        if (token.IsCancellationRequested)
-                            throw new OperationCanceledException($"Process cancelled by the user.");
-
-                        var msg = server.ReadMessage();
-                        if (msg.Length == 0) continue;
-                        var evt = SerializationHelper.StreamToEvent(msg);
-                        this.TraceEvents(new[] { evt });
-                    }
-
-                    var processExitTask = Task.Run(() => p.WaitForExit(), token);
-                    var tokenCancelledTask = Task.Run(() => token.WaitHandle.WaitOne(), token);
-
-                    Task.WaitAny(processExitTask, tokenCancelledTask);
-                    if (token.IsCancellationRequested)
-                    {
-                        throw new OperationCanceledException($"Process cancelled by the user.");
-                    }
-
-                    return (Verdict)p.ExitCode;
+                    // process.Kill may throw if it has already exited.
+                    p.Kill();
                 }
-                finally
+                catch (Exception ex)
                 {
-                    ResumeStdout();
-                    if (p.HasExited == false)
-                    {
-                        p.Kill();
-                    }
+                    log.Warning("Caught exception when killing process. {0}", ex.Message);
+                }
+            });
+
+            try
+            {
+                var server = new NamedPipeServerStream(handle, PipeDirection.InOut, 1);
+                server.WaitForConnectionAsync(token).GetAwaiter().GetResult();
+                if (token.IsCancellationRequested)
+                    throw new OperationCanceledException($"Process cancelled by the user.");
+                // Resume stdout after the server has connected as we now know the application has launched
+                ResumeStdout();
+
+                var stepString = new TapSerializer().SerializeToString(step);
+                server.WriteMessage(stepString);
+
+                while (server.IsConnected && p.HasExited == false)
+                {
+                    if (token.IsCancellationRequested)
+                        throw new OperationCanceledException($"Process cancelled by the user.");
+
+                    var msg = server.ReadMessage();
+                    if (msg.Length == 0) continue;
+                    var evt = SerializationHelper.StreamToEvent(msg);
+                    this.TraceEvents(new[] { evt });
+                }
+
+                var processExitTask = Task.Run(() => p.WaitForExit(), token);
+                var tokenCancelledTask = Task.Run(() => token.WaitHandle.WaitOne(), token);
+
+                Task.WaitAny(processExitTask, tokenCancelledTask);
+                if (token.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException($"Process cancelled by the user.");
+                }
+
+                return (Verdict)p.ExitCode;
+            }
+            finally
+            {
+                ResumeStdout();
+                if (p.HasExited == false)
+                {
+                    p.Kill();
                 }
             }
         }

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -7,68 +8,122 @@ namespace OpenTap.Package.PackageInstallHelpers
 {
     internal interface IFileLock : IDisposable
     {
+        bool WaitOne();
+        bool WaitOne(TimeSpan timeout);
+        bool WaitOne(int ms);
+        WaitHandle WaitHandle { get; }
+        void Release();
     }
 
     internal static class FileLock
     {
-        public static IFileLock Take(string file)
+        public static IFileLock Create(string file)
         {
-            if (OperatingSystem.Current == OperatingSystem.Windows) return Win32FileLock.Take(file);
-            return PosixFileLock.Take(file);
+            if (OperatingSystem.Current == OperatingSystem.Windows) return new Win32FileLock(file);
+            return new PosixFileLock(file);
         }
     }
 
     /// <summary> Locks a file using flock on linux. This essentially works as a named mutex.  </summary>
     class PosixFileLock : IFileLock
     {
-        int fd;
+        int fileDescriptor;
+        private readonly ManualResetEvent _waitHandle;
 
-        public static PosixFileLock Take(string file)
+        public PosixFileLock(string file)
         {
             // Open 'file' in read/write + append mode. If the file does not exist it will be created with the
             // most permissive access settings possible
-            int fd = PosixNative.open(file, PosixNative.O_RDWR | PosixNative.O_APPEND, PosixNative.ALL_READ_WRITE);
-            var lockObj = new PosixFileLock() { fd = fd };
-            lockObj.Take();
-            return lockObj;
+            fileDescriptor =
+                PosixNative.open(file, PosixNative.O_RDWR | PosixNative.O_APPEND, PosixNative.ALL_READ_WRITE);
+            if (fileDescriptor == -1) throw new IOException($"Failed create file lock.");
+            _waitHandle = new ManualResetEvent(false);
         }
 
         /// <summary>
         /// Request an exclusive lock on the open file handle
         /// This call wil block until the lock is acquired
         /// </summary>
-        void Take() => PosixNative.flock(fd, PosixNative.LOCK_EX);
+        private void Take()
+        {
+            PosixNative.flock(fileDescriptor, PosixNative.LOCK_EX);
+        }
 
-        void Release() => PosixNative.close(fd);
+        public void Release()
+        {
+            if (fileDescriptor >= 0)
+            {
+                PosixNative.flock(fileDescriptor, PosixNative.LOCK_UN);
+                _waitHandle.Reset();
+            }
+        }
 
         public void Dispose()
         {
-            if (fd >= 0)
+            if (fileDescriptor >= 0 && _waitHandle.WaitOne(0))
             {
                 Release();
-                fd = -1;
             }
 
+            PosixNative.close(fileDescriptor);
+            fileDescriptor = -1;
         }
+
+        public bool WaitOne()
+        {
+            Take();
+            _waitHandle.Set();
+            return true;
+        }
+
+        public bool WaitOne(TimeSpan timeout)
+        {
+            var sw = Stopwatch.StartNew();
+            do
+            {
+                var @lock = PosixNative.flock(fileDescriptor, PosixNative.LOCK_NB | PosixNative.LOCK_EX);
+                if (@lock == 0)
+                {
+                    _waitHandle.Set();
+                    return true;
+                }
+
+                var remaining = timeout - sw.Elapsed;
+                if (remaining.TotalMilliseconds > 1)
+                    TapThread.Sleep(1);
+                else Thread.Yield();
+            } while (sw.Elapsed < timeout);
+
+            return false;
+        }
+
+        public bool WaitOne(int ms) => WaitOne(TimeSpan.FromMilliseconds(ms));
+        public WaitHandle WaitHandle => _waitHandle;
     }
 
     class Win32FileLock : IFileLock
     {
-        private Mutex mtx;
+        private Mutex _mutex;
 
-        public static Win32FileLock Take(string file)
+        public Win32FileLock(string file)
         {
-            var mtx = new Mutex(false, "package_install_lock_" + Path.GetFullPath(file).GetHashCode());
-            mtx.WaitOne();
-            return new Win32FileLock() { mtx = mtx };
+            _mutex = new Mutex(false, "package_install_lock_" + Path.GetFullPath(file).GetHashCode());
         }
 
         public void Dispose()
         {
-            mtx?.ReleaseMutex();
-            mtx?.Dispose();
-            mtx = null;
+            if (_mutex?.WaitOne(0) == true)
+                _mutex?.ReleaseMutex();
+            _mutex?.Dispose();
+            _mutex = null;
         }
+
+        public bool WaitOne() => _mutex.WaitOne();
+        public bool WaitOne(TimeSpan timeout) => _mutex.WaitOne(timeout);
+        public bool WaitOne(int ms) => _mutex.WaitOne(ms);
+
+        public WaitHandle WaitHandle => _mutex;
+        public void Release() => _mutex.ReleaseMutex();
     }
 
     static class PosixNative
@@ -86,8 +141,22 @@ namespace OpenTap.Package.PackageInstallHelpers
         public const int O_TRUNC = 512; //00001000;
         public const int O_APPEND = 1024; //00002000;
         public const int O_RDWR = 2; //00000002;
+        /// <summary>
+        /// Place a shared lock. More than one process may hold a shared lock for a given file at a given time. 
+        /// </summary>
         public const int LOCK_SH = 1;
+        /// <summary>
+        /// Place an exclusive lock. Only one process may hold an exclusive lock for a given file at a given time. 
+        /// </summary>
         public const int LOCK_EX = 2;
+        /// <summary>
+        /// Return an error instead of blocking when the lock is taken
+        /// </summary>
+        public const int LOCK_NB = 4;
+        /// <summary>
+        /// Release the lock
+        /// </summary>
+        public const int LOCK_UN = 8;
 
         public const int S_IRUSR = 256; //00000400
         public const int S_IWUSR = 128; //00000200
