@@ -63,12 +63,10 @@ namespace OpenTap
             }
 
             var ms = new MemoryStream();
-            var index = 0;
 
             foreach (var buf2 in buffers)
             {
-                ms.Write(buf2, index, buf2.Length);
-                index += buf2.Length;
+                ms.Write(buf2, 0, buf2.Length);
             }
 
             ms.Seek(0, SeekOrigin.Begin);
