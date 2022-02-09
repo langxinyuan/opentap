@@ -8,6 +8,35 @@ namespace OpenTap
 {
     internal static class PipeReader
     {
+        internal static void WriteShort(this PipeStream pipe, ushort value)
+        {
+            var buffer = new[]
+            {
+                // Lower byte
+                (byte)(value & 0x00ff),
+                // Higher byte
+                (byte)(value >> 8)
+            };
+            pipe.Write(buffer, 0, 2);
+        }
+
+        internal static ushort ReadShort(this PipeStream pipe)
+        {
+            var buffer = new byte[2];
+            var numRead = 0;
+
+            while (numRead < 2)
+            {
+                numRead += pipe.Read(buffer, numRead, 2 - numRead);
+                if (numRead == 0) return 0;
+            }
+
+            var lower = buffer[0];
+            var upper = buffer[1];
+
+            return (ushort)(lower | (upper << 8));
+        }
+
         /// <summary>
         /// Reads a message by interpreting the first byte as the message length
         /// and the concatenating reads until it encounters a terminating message of length '0'.
@@ -16,24 +45,7 @@ namespace OpenTap
         /// <returns></returns>
         public static MemoryStream ReadMessage(this PipeStream pipe)
         {
-            int getLength()
-            {
-                var buffer = new byte[2];
-                var numRead = 0;
-
-                while (numRead < 2)
-                {
-                    numRead += pipe.Read(buffer, numRead, 2 - numRead);
-                    if (numRead == 0) return 0;
-                }
-
-                var lower = buffer[0];
-                var upper = buffer[1];
-
-                return lower | (upper << 8);
-            }
-
-            var messageLength = getLength();
+            var messageLength = pipe.ReadShort();
             var buffers = new List<byte[]>();
 
             while (messageLength > 0)
@@ -47,7 +59,7 @@ namespace OpenTap
 
                 buffers.Add(buf);
 
-                messageLength = getLength();
+                messageLength = pipe.ReadShort();
             }
 
             var ms = new MemoryStream();
@@ -85,22 +97,18 @@ namespace OpenTap
                 var remaining = bytes.Length;
                 while (remaining > 0)
                 {
-                    var length = Math.Min(remaining, UInt16.MaxValue);
+                    var length = (ushort)Math.Min(remaining, ushort.MaxValue);
                     remaining -= length;
                     // first send the message length
-                    // lower byte
-                    pipe.WriteByte((byte)(length & 255));
-                    // higher byte
-                    pipe.WriteByte((byte)(length / 256));
+                    pipe.WriteShort(length);
                     // then write the message
                     pipe.Write(bytes, sent, length);
 
                     sent += length;
                 }
 
-                // the message is terminated by 0 indicating a 0 length message
-                pipe.WriteByte(0);
-                pipe.WriteByte(0);
+                // the message is terminated by indicating a 0 length message
+                pipe.WriteShort(0);
                 pipe.Flush();
             }
         }
