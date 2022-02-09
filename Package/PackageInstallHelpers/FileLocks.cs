@@ -35,8 +35,8 @@ namespace OpenTap.Package.PackageInstallHelpers
             // Open 'file' in read/write + append mode. If the file does not exist it will be created with the
             // most permissive access settings possible
             fileDescriptor =
-                PosixNative.open(file, PosixNative.O_RDWR | PosixNative.O_APPEND, PosixNative.ALL_READ_WRITE);
-            if (fileDescriptor == -1) throw new IOException($"Failed create file lock.");
+                PosixNative.open(file, PosixNative.O_RDWR | PosixNative.O_APPEND | PosixNative.O_CREAT, PosixNative.ALL_READ_WRITE);
+            if (fileDescriptor == -1) throw new IOException($"Failed create file lock on {file}");
             _waitHandle = new ManualResetEvent(false);
         }
 
