@@ -105,15 +105,24 @@ namespace OpenTap.Package.PackageInstallHelpers
     {
         private Mutex _mutex;
 
-        public Win32FileLock(string file)
+        public Win32FileLock(string name)
         {
-            _mutex = new Mutex(false, "package_install_lock_" + Path.GetFullPath(file).GetHashCode());
+            // Having backslashes in the mutex name seems to cause issues for some reason. Replace them with slashes.
+            _mutex = new Mutex(false, name.Replace("\\", "/") + "_opentap_named_mutex_");
         }
 
         public void Dispose()
         {
-            if (_mutex?.WaitOne(0) == true)
-                _mutex?.ReleaseMutex();
+            try
+            {
+                if (_mutex?.WaitOne(0) == true)
+                    _mutex?.ReleaseMutex();
+            }
+            catch (AbandonedMutexException ex)
+            {
+                // this is fine
+            }
+
             _mutex?.Dispose();
             _mutex = null;
         }

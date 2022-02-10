@@ -59,35 +59,39 @@ namespace OpenTap.Package.UnitTests
         [Test]
         public void TestExclusiveAccess()
         {
-            var evt = new ManualResetEventSlim(false);
-            var filename = Path.GetTempFileName();
-            
-            using var innerMutex = FileLock.Create(filename);
-            // Manually disposed
-            var outerMutex = FileLock.Create(filename);
+            var outerEvent = new ManualResetEventSlim(false);
+            var innerEvent = new ManualResetEventSlim(false);
+            var mutexName = Path.GetTempFileName();
+
+            using var innerMutex = FileLock.Create(mutexName);
+            // Manually disposed later
+            var outerMutex = FileLock.Create(mutexName);
 
             { // Verify the outer mutex works
                 Assert.IsTrue(outerMutex.WaitOne(0));
                 outerMutex.Release();
+                Assert.IsTrue(outerMutex.WaitOne(0));
+                outerMutex.Release();
             }
-            
+
             Task.Run(() =>
             {
                 Assert.IsTrue(innerMutex.WaitOne());
-                evt.Wait();
+                innerEvent.Set();
+                outerEvent.Wait();
                 // Sleep for a "long" time before releasing
                 TapThread.Sleep(TimeSpan.FromSeconds(1));
                 innerMutex.Release();
             });
-            
+
             // Wait for the inner mutex to be acquired
-            innerMutex.WaitHandle.WaitOne();
+            innerEvent.Wait();
             // Verify this locks the outer mutex
             Assert.IsFalse(outerMutex.WaitOne(0));
             // Signal the thread to release the inner mutex
             var sw = Stopwatch.StartNew();
             var limit = TimeSpan.FromSeconds(2);
-            evt.Set();
+            outerEvent.Set();
             // Wait for the inner mutex to be released. Also test that timeouts work
             Assert.IsTrue(outerMutex.WaitOne(limit));
             Assert.IsTrue(sw.Elapsed < limit, "Timeout took longer than expected!");
